@@ -62,6 +62,7 @@ function showTab(name) {
   hideAlert();
   if (name !== "scan") stopQr();
   if (name === "history") loadHistory();
+  if (name === "products" && $("#product-search").value.trim().length < 2) loadTopIncreases();
 }
 document.querySelectorAll("[data-nav]").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.nav)));
 
@@ -284,21 +285,76 @@ function itemCard(it) {
     </div>`;
 }
 
-function renderReport(report) {
+// ---------- toast ----------
+let toastTimer;
+function toast(msg, ms = 2600) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add("hidden"), ms);
+}
+
+// ---------- report rendering ----------
+const isDesktop = () => window.matchMedia("(min-width: 768px)").matches;
+const historyTabActive = () => !$("#tab-history").classList.contains("hidden");
+const HISTORY_PLACEHOLDER = `
+  <div class="rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-700 p-10 text-center text-slate-500">
+    Επιλέξτε τιμολόγιο από τη λίστα για να δείτε τη σύγκριση τιμών.
+  </div>`;
+
+// Renders into #results (Scan tab) or #history-report (desktop split view)
+function renderReport(report, container = $("#results")) {
   currentReport = report;
-  const inv = report.invoice;
-  const sm = report.summary;
+  container._report = report;
+  container._filter = new Set();
+  drawReport(container);
+  if (container.id === "results") {
+    showTab("scan");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+}
+
+function itemsSection(report, filter) {
+  if (filter.size) {
+    const shown = report.items.filter((it) => filter.has(it.status));
+    return `
+      <div class="flex justify-between items-center mb-2 text-sm">
+        <span class="text-slate-500 dark:text-slate-400">Εμφανίζονται ${shown.length} από ${report.items.length} είδη</span>
+        <button class="btn-clear-filter text-blue-600 dark:text-blue-400 font-semibold px-2 py-1">✕ Όλα</button>
+      </div>
+      <div class="space-y-3">${shown.length ? shown.map(itemCard).join("") : `<p class="text-center text-slate-500 py-6">Κανένα είδος σε αυτή την κατηγορία.</p>`}</div>`;
+  }
   const groups = { INCREASED: [], DECREASED: [], NEW_ITEM: [], UNCHANGED: [] };
   report.items.forEach((it) => groups[it.status].push(it));
+  return `
+    <div class="space-y-3">
+      ${[...groups.INCREASED, ...groups.DECREASED, ...groups.NEW_ITEM].map(itemCard).join("")}
+    </div>
+    ${groups.UNCHANGED.length ? `
+      <details class="mt-4 rounded-2xl bg-white dark:bg-slate-800 shadow">
+        <summary class="p-4 font-semibold cursor-pointer select-none">⚪ ${groups.UNCHANGED.length} σταθερές τιμές ▾</summary>
+        <div class="space-y-3 p-3 pt-0">${groups.UNCHANGED.map(itemCard).join("")}</div>
+      </details>` : ""}`;
+}
 
-  const badges = ["INCREASED", "DECREASED", "UNCHANGED", "NEW_ITEM"]
-    .map((k) => `<span class="px-3 py-1.5 rounded-full text-sm font-semibold ${STATUS[k].card} border">${STATUS[k].icon} ${sm[k] || 0} ${sm[k] === 1 ? STATUS[k].label : STATUS[k].plural}</span>`)
-    .join("");
+function drawReport(container) {
+  const report = container._report;
+  const filter = container._filter;
+  const inv = report.invoice;
+  const sm = report.summary;
 
-  const warnings = (report.warnings || []).filter((w) => !report.duplicate)
+  const chips = ["INCREASED", "DECREASED", "UNCHANGED", "NEW_ITEM"].map((k) => {
+    const active = filter.has(k);
+    return `<button data-filter="${k}" aria-pressed="${active}"
+      class="px-3 py-1.5 rounded-full text-sm font-semibold border ${STATUS[k].card} ${active ? "ring-2 ring-offset-2 ring-blue-500 dark:ring-offset-slate-900" : ""} ${!sm[k] ? "opacity-50" : ""}">
+      ${STATUS[k].icon} ${sm[k] || 0} ${sm[k] === 1 ? STATUS[k].label : STATUS[k].plural}</button>`;
+  }).join("");
+
+  const warnings = (report.warnings || []).filter(() => !report.duplicate)
     .map((w) => `<li>⚠️ ${esc(w)}</li>`).join("");
 
-  $("#results").innerHTML = `
+  container.innerHTML = `
     <div class="rounded-2xl bg-white dark:bg-slate-800 shadow p-4 mb-4">
       <div class="flex justify-between items-start gap-2">
         <div class="min-w-0">
@@ -311,58 +367,90 @@ function renderReport(report) {
           <div class="text-xs text-slate-500 mt-1">Σύνολο</div><div class="font-bold text-lg">${eur(inv.total_gross)}</div>
         </div>
       </div>
-      <div class="flex flex-wrap gap-2 mt-3">${badges}</div>
+      <div class="flex flex-wrap gap-2 mt-3">
+        <button class="btn-view-file px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-sm font-semibold">📄 Προβολή Τιμολογίου</button>
+        ${sm.INCREASED ? `<button class="btn-copy-incr px-3 py-2 rounded-lg bg-red-600 text-white text-sm font-semibold">📋 Αντιγραφή Αυξήσεων</button>` : ""}
+      </div>
+      <div class="flex flex-wrap gap-2 mt-3">${chips}</div>
       ${warnings ? `<ul class="mt-3 text-sm text-amber-700 dark:text-amber-300 space-y-1">${warnings}</ul>` : ""}
     </div>
-    <div class="space-y-3">
-      ${[...groups.INCREASED, ...groups.DECREASED, ...groups.NEW_ITEM].map(itemCard).join("")}
-    </div>
-    ${groups.UNCHANGED.length ? `
-      <details class="mt-4 rounded-2xl bg-white dark:bg-slate-800 shadow">
-        <summary class="p-4 font-semibold cursor-pointer select-none">⚪ ${groups.UNCHANGED.length} σταθερές τιμές ▾</summary>
-        <div class="space-y-3 p-3 pt-0">${groups.UNCHANGED.map(itemCard).join("")}</div>
-      </details>` : ""}
+    ${itemsSection(report, filter)}
     <div class="grid grid-cols-2 gap-3 mt-6">
-      <button id="btn-new-scan" class="py-4 rounded-2xl bg-blue-600 text-white font-semibold">📷 Νέα σάρωση</button>
-      <button id="btn-delete-inv" class="py-4 rounded-2xl bg-white dark:bg-slate-800 border border-red-300 text-red-600 font-semibold">🗑️ Διαγραφή</button>
+      <button class="btn-new-scan py-4 rounded-2xl bg-blue-600 text-white font-semibold">📷 Νέα σάρωση</button>
+      <a href="/api/invoices/${inv.id}/export.csv" download class="flex items-center justify-center py-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 font-semibold text-center">📥 Εξαγωγή CSV (Soft1)</a>
+      <button class="btn-delete-inv col-span-2 py-4 rounded-2xl bg-white dark:bg-slate-800 border border-red-300 text-red-600 font-semibold">🗑️ Διαγραφή</button>
     </div>`;
-
-  $("#btn-new-scan").onclick = () => { $("#results").innerHTML = ""; if (!batchRunning) $("#batch").innerHTML = ""; hideAlert(); window.scrollTo({ top: 0, behavior: "smooth" }); };
-  $("#btn-delete-inv").onclick = () => deleteInvoice(inv.id);
-  showTab("scan");
-  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-// Inline edit (event delegation)
-$("#results").addEventListener("click", async (e) => {
-  const card = e.target.closest("[data-item]");
-  if (!card) return;
-  if (e.target.closest(".btn-edit")) {
-    card.querySelector(".edit-form").classList.toggle("hidden");
-    return;
-  }
-  if (e.target.closest(".btn-save")) {
-    const qty = parseFloat(card.querySelector(".inp-qty").value.replace(",", "."));
-    const price = parseFloat(card.querySelector(".inp-price").value.replace(",", "."));
-    if (!(qty > 0) || !(price >= 0)) return showAlert("Μη έγκυρη ποσότητα ή τιμή.");
-    try {
-      const report = await api(`/api/items/${card.dataset.item}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ quantity: qty, unit_price_net: price }),
-      });
-      renderReport(report);
-      showAlert("✅ Η διόρθωση αποθηκεύτηκε και η σύγκριση ενημερώθηκε.", "ok");
-    } catch (err) {
-      showAlert(`❌ ${esc(err.message)}`);
-    }
-  }
-});
+// One delegated handler per report container
+function attachReportHandlers(container) {
+  container.addEventListener("click", async (e) => {
+    const report = container._report;
+    if (!report) return;
 
-async function deleteInvoice(id) {
+    const chip = e.target.closest("[data-filter]");
+    if (chip) {
+      const k = chip.dataset.filter;
+      container._filter.has(k) ? container._filter.delete(k) : container._filter.add(k);
+      drawReport(container);
+      return;
+    }
+    if (e.target.closest(".btn-clear-filter")) { container._filter.clear(); drawReport(container); return; }
+    if (e.target.closest(".btn-view-file")) return viewFile(report.invoice.id);
+    if (e.target.closest(".btn-copy-incr")) {
+      const ok = await copyText(disputeText(report));
+      toast(ok ? "✅ Οι αυξήσεις αντιγράφηκαν στο πρόχειρο" : "❌ Η αντιγραφή απέτυχε");
+      return;
+    }
+    if (e.target.closest(".btn-new-scan")) {
+      $("#results").innerHTML = "";
+      if (!batchRunning) $("#batch").innerHTML = "";
+      showTab("scan");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    if (e.target.closest(".btn-delete-inv")) return deleteInvoice(report.invoice.id, container);
+
+    // Inline edit
+    const card = e.target.closest("[data-item]");
+    if (!card) return;
+    if (e.target.closest(".btn-edit")) {
+      card.querySelector(".edit-form").classList.toggle("hidden");
+      return;
+    }
+    if (e.target.closest(".btn-save")) {
+      const qty = parseFloat(card.querySelector(".inp-qty").value.replace(",", "."));
+      const price = parseFloat(card.querySelector(".inp-price").value.replace(",", "."));
+      if (!(qty > 0) || !(price >= 0)) return showAlert("Μη έγκυρη ποσότητα ή τιμή.");
+      try {
+        const updated = await api(`/api/items/${card.dataset.item}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ quantity: qty, unit_price_net: price }),
+        });
+        renderReport(updated, container);
+        if (container.id === "history-report") renderHistoryList(await fetchHistory());
+        showAlert("✅ Η διόρθωση αποθηκεύτηκε και η σύγκριση ενημερώθηκε.", "ok");
+      } catch (err) {
+        showAlert(`❌ ${esc(err.message)}`);
+      }
+    }
+  });
+}
+attachReportHandlers($("#results"));
+attachReportHandlers($("#history-report"));
+
+async function deleteInvoice(id, container) {
   if (!confirm("Διαγραφή αυτού του τιμολογίου και των ειδών του;")) return;
   try {
     await api(`/api/invoices/${id}`, { method: "DELETE" });
-    $("#results").innerHTML = "";
+    container._report = null;
+    if (container.id === "history-report") {
+      container.innerHTML = HISTORY_PLACEHOLDER;
+      selectedInvoiceId = null;
+      loadHistory();
+    } else {
+      container.innerHTML = "";
+    }
     showAlert("Το τιμολόγιο διαγράφηκε.", "info");
   } catch (e) {
     showAlert(`❌ ${esc(e.message)}`);
@@ -371,13 +459,122 @@ async function deleteInvoice(id) {
 
 async function openReport(id) {
   try {
-    renderReport(await api(`/api/invoices/${id}/report`));
+    const report = await api(`/api/invoices/${id}/report`);
+    if (isDesktop() && historyTabActive()) {
+      selectedInvoiceId = Number(id);
+      renderReport(report, $("#history-report"));
+      renderHistoryList(historyInvoices);
+    } else {
+      renderReport(report);
+    }
   } catch (e) {
     showAlert(`❌ ${esc(e.message)}`);
   }
 }
 
+// ---------- dispute copy ----------
+function disputeText(report) {
+  const inv = report.invoice;
+  const items = report.items.filter((i) => i.status === "INCREASED");
+  const ref = `${inv.invoice_number ? `αρ. ${inv.invoice_number} ` : ""}της ${fmtDate(inv.invoice_date)}`;
+  const lines = [
+    `Θέμα: Αυξήσεις τιμών στο τιμολόγιο ${ref}`,
+    "",
+    `Προς: ${inv.supplier_name} (ΑΦΜ ${inv.supplier_afm})`,
+    "",
+    "Καλησπέρα σας,",
+    "",
+    `Στο τιμολόγιο ${ref} εντοπίσαμε τις παρακάτω αυξήσεις τιμών σε σχέση με την προηγούμενη αγορά μας:`,
+    "",
+    ...items.map((it, n) =>
+      `${n + 1}. ${it.description}${it.product_code ? ` (κωδ. ${it.product_code})` : ""}: ` +
+      `${eur(it.old_price)} → ${eur(it.unit_price_net)} (${pct(it.diff_percent)}, προηγούμενη τιμή από ${fmtDate(it.previous_date)})`),
+    "",
+    "Παρακαλούμε για τον έλεγχο και την επιβεβαίωση των τιμών ή την έκδοση πιστωτικού τιμολογίου.",
+    "",
+    "Με εκτίμηση",
+  ];
+  return lines.join("\n").replace(/ /g, " ");
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
+  }
+  // Plain-HTTP LAN: Clipboard API unavailable -> legacy fallback
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { ok = false; }
+  ta.remove();
+  return ok;
+}
+
+// ---------- invoice file viewer ----------
+let fileUrl = null;
+let fileZoomed = false;
+
+async function viewFile(id) {
+  let res;
+  try {
+    res = await fetch(`/api/invoices/${id}/file`);
+  } catch {
+    return toast("❌ Δεν υπάρχει σύνδεση με τον διακομιστή.");
+  }
+  if (!res.ok) return toast("📄 Το αρχείο του τιμολογίου δεν είναι διαθέσιμο.");
+  const blob = await res.blob();
+  const type = blob.type || res.headers.get("content-type") || "";
+  if (fileUrl) URL.revokeObjectURL(fileUrl);
+  fileUrl = URL.createObjectURL(blob);
+  const box = $("#file-content");
+  const zoomBtn = $("#file-zoom");
+  if (type.includes("pdf")) {
+    zoomBtn.classList.add("hidden");
+    box.innerHTML = `
+      <div class="h-full flex flex-col">
+        <iframe src="${fileUrl}" class="flex-1 w-full bg-white" title="Τιμολόγιο PDF"></iframe>
+        <a href="${fileUrl}" target="_blank" rel="noopener" class="block text-center text-white underline py-3">Άνοιγμα PDF σε νέα καρτέλα</a>
+      </div>`;
+  } else {
+    fileZoomed = false;
+    zoomBtn.textContent = "🔍 200%";
+    zoomBtn.classList.remove("hidden");
+    box.innerHTML = `<img id="file-img" src="${fileUrl}" alt="Τιμολόγιο" class="block mx-auto max-w-full h-auto cursor-zoom-in">`;
+  }
+  $("#file-modal").classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function toggleFileZoom() {
+  const img = $("#file-img");
+  if (!img) return;
+  fileZoomed = !fileZoomed;
+  img.style.width = fileZoomed ? "200%" : "";
+  img.style.maxWidth = fileZoomed ? "none" : "";
+  img.classList.toggle("cursor-zoom-in", !fileZoomed);
+  img.classList.toggle("cursor-zoom-out", fileZoomed);
+  $("#file-zoom").textContent = fileZoomed ? "🔍 100%" : "🔍 200%";
+}
+
+function closeFile() {
+  $("#file-modal").classList.add("hidden");
+  $("#file-content").innerHTML = "";
+  document.body.style.overflow = "";
+  if (fileUrl) { URL.revokeObjectURL(fileUrl); fileUrl = null; }
+}
+$("#file-zoom").addEventListener("click", toggleFileZoom);
+$("#file-content").addEventListener("click", (e) => { if (e.target.id === "file-img") toggleFileZoom(); });
+$("#file-close").addEventListener("click", closeFile);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#file-modal").classList.contains("hidden")) closeFile(); });
+
 // ---------- history ----------
+let historyInvoices = [];
+let selectedInvoiceId = null;
+
 async function loadSuppliers() {
   const sel = $("#supplier-filter");
   const current = sel.value;
@@ -389,41 +586,97 @@ async function loadSuppliers() {
   } catch { /* non-fatal */ }
 }
 
+async function fetchHistory() {
+  const sid = $("#supplier-filter").value;
+  historyInvoices = await api(`/api/invoices${sid ? `?supplier_id=${sid}` : ""}`);
+  return historyInvoices;
+}
+
+function renderHistoryList(invoices) {
+  const list = $("#history-list");
+  const onlyInc = $("#only-increases").checked;
+  const shown = onlyInc ? invoices.filter((i) => i.increases > 0) : invoices;
+  if (!shown.length) {
+    list.innerHTML = `<p class="text-center text-slate-500 py-8">${onlyInc && invoices.length ? "Κανένα τιμολόγιο με αυξήσεις." : "Δεν υπάρχουν καταχωρημένα τιμολόγια."}</p>`;
+    return;
+  }
+  list.innerHTML = shown.map((i) => `
+    <button data-open="${i.id}" class="w-full text-left rounded-xl bg-white dark:bg-slate-800 shadow-sm p-4 flex justify-between items-center gap-3 active:bg-slate-50 dark:active:bg-slate-700 ${i.id === selectedInvoiceId ? "md:ring-2 md:ring-blue-500" : ""}">
+      <div class="min-w-0">
+        <div class="font-semibold truncate">${esc(i.supplier_name)}</div>
+        <div class="text-sm text-slate-500 dark:text-slate-400">${fmtDate(i.invoice_date)} · ${i.item_count} είδη${i.invoice_number ? ` · ${esc(i.invoice_number)}` : ""}</div>
+      </div>
+      <div class="text-right shrink-0">
+        <div class="font-bold">${eur(i.total_gross ?? i.total_net)}</div>
+        ${i.has_increases ? `<span class="inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-200">🔴 ${i.increases}</span>` : ""}
+        ${i.decreases ? `<span class="inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700 dark:bg-green-900/60 dark:text-green-200">🟢 ${i.decreases}</span>` : ""}
+      </div>
+    </button>`).join("");
+}
+
 async function loadHistory() {
   await loadSuppliers();
   const list = $("#history-list");
   list.innerHTML = `<div class="flex justify-center py-8"><div class="spinner"></div></div>`;
   try {
-    const sid = $("#supplier-filter").value;
-    const invoices = await api(`/api/invoices${sid ? `?supplier_id=${sid}` : ""}`);
-    if (!invoices.length) {
-      list.innerHTML = `<p class="text-center text-slate-500 py-8">Δεν υπάρχουν καταχωρημένα τιμολόγια.</p>`;
-      return;
-    }
-    list.innerHTML = invoices.map((i) => `
-      <button data-open="${i.id}" class="w-full text-left rounded-xl bg-white dark:bg-slate-800 shadow-sm p-4 flex justify-between items-center gap-3 active:bg-slate-50 dark:active:bg-slate-700">
-        <div class="min-w-0">
-          <div class="font-semibold truncate">${esc(i.supplier_name)}</div>
-          <div class="text-sm text-slate-500 dark:text-slate-400">${fmtDate(i.invoice_date)} · ${i.item_count} είδη${i.invoice_number ? ` · ${esc(i.invoice_number)}` : ""}</div>
-        </div>
-        <div class="text-right shrink-0">
-          <div class="font-bold">${eur(i.total_gross ?? i.total_net)}</div>
-          ${i.has_increases ? `<span class="inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-200">🔴 ${i.increases}</span>` : ""}
-          ${i.decreases ? `<span class="inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700 dark:bg-green-900/60 dark:text-green-200">🟢 ${i.decreases}</span>` : ""}
-        </div>
-      </button>`).join("");
+    renderHistoryList(await fetchHistory());
   } catch (e) {
     list.innerHTML = "";
     showAlert(`❌ ${esc(e.message)}`);
   }
 }
 $("#supplier-filter").addEventListener("change", loadHistory);
+$("#only-increases").addEventListener("change", () => renderHistoryList(historyInvoices));
 $("#history-list").addEventListener("click", (e) => {
   const b = e.target.closest("[data-open]");
   if (b) openReport(b.dataset.open);
 });
 
 // ---------- products ----------
+function sparkline(timeline) {
+  const pts = [...timeline].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  if (pts.length < 2) return "";
+  const W = 300, H = 40, P = 5;
+  const prices = pts.map((p) => p.unit_price);
+  const min = Math.min(...prices), max = Math.max(...prices);
+  const x = (i) => P + (i * (W - 2 * P)) / (pts.length - 1);
+  const y = (v) => (max === min ? H / 2 : H - P - ((v - min) * (H - 2 * P)) / (max - min));
+  const first = prices[0], last = prices[prices.length - 1];
+  const color = last < first ? "#16a34a" : last > first ? "#dc2626" : "#64748b";
+  const points = prices.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const n = prices.length - 1;
+  return `
+    <svg viewBox="0 0 ${W} ${H}" class="w-full h-10 mt-2" role="img" aria-label="Εξέλιξη τιμής: ${esc(eur(first))} → ${esc(eur(last))}">
+      <polyline points="${points}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+      <circle cx="${x(0).toFixed(1)}" cy="${y(first).toFixed(1)}" r="3.5" fill="${color}"/>
+      <circle cx="${x(n).toFixed(1)}" cy="${y(last).toFixed(1)}" r="3.5" fill="${color}"/>
+    </svg>`;
+}
+
+async function loadTopIncreases() {
+  const box = $("#top-increases");
+  box.classList.remove("hidden");
+  box.innerHTML = `<div class="flex justify-center py-6"><div class="spinner"></div></div>`;
+  try {
+    const rows = await api("/api/products/top-increases?days=30");
+    box.innerHTML = `
+      <h2 class="font-bold mb-1">🔺 Μεγαλύτερες αυξήσεις (30 ημέρες)</h2>
+      ${rows.length ? rows.map((r) => `
+        <button data-open="${r.invoice_id}" class="w-full text-left rounded-xl bg-white dark:bg-slate-800 shadow-sm p-3 flex justify-between items-center gap-3 border-l-4 border-red-500 active:bg-slate-50 dark:active:bg-slate-700">
+          <div class="min-w-0">
+            <div class="font-semibold truncate">${esc(r.description)}</div>
+            <div class="text-xs text-slate-500 dark:text-slate-400 truncate">${esc(r.supplier_name)} · ${fmtDate(r.invoice_date)}</div>
+          </div>
+          <div class="text-right shrink-0">
+            <div class="text-sm"><span class="line-through text-slate-400">${eur(r.old_price)}</span> → <b>${eur(r.new_price)}</b></div>
+            <div class="text-sm font-bold text-red-600 dark:text-red-400">${pct(r.diff_percent)}</div>
+          </div>
+        </button>`).join("") : `<p class="text-center text-slate-500 py-6">Καμία αύξηση τιμής τις τελευταίες 30 ημέρες. 👍</p>`}`;
+  } catch (e) {
+    box.innerHTML = "";
+  }
+}
+
 let searchTimer;
 $("#product-search").addEventListener("input", (e) => {
   clearTimeout(searchTimer);
@@ -432,7 +685,12 @@ $("#product-search").addEventListener("input", (e) => {
 
 async function searchProducts(q) {
   const out = $("#product-results");
-  if (q.length < 2) { out.innerHTML = ""; return; }
+  if (q.length < 2) {
+    out.innerHTML = "";
+    loadTopIncreases();
+    return;
+  }
+  $("#top-increases").classList.add("hidden");
   try {
     const groups = await api(`/api/products/search?q=${encodeURIComponent(q)}`);
     if (!groups.length) {
@@ -444,6 +702,7 @@ async function searchProducts(q) {
         <div class="font-semibold">${esc(g.name)}</div>
         ${g.product_code ? `<div class="text-xs text-slate-500">Κωδ. ${esc(g.product_code)}</div>` : ""}
         ${g.supplier_count > 1 ? `<div class="mt-2 text-sm font-semibold text-green-700 dark:text-green-300">🏆 Φθηνότερος: ${esc(g.cheapest.supplier)} — ${eur(g.cheapest.unit_price)}</div>` : ""}
+        ${g.timeline.length >= 2 ? sparkline(g.timeline) : ""}
         <table class="w-full mt-2 text-sm">
           <thead><tr class="text-left text-xs text-slate-500"><th class="py-1">Ημ/νία</th><th>Προμηθευτής</th><th class="text-right">Τιμή</th></tr></thead>
           <tbody>
@@ -460,10 +719,21 @@ async function searchProducts(q) {
     showAlert(`❌ ${esc(e.message)}`);
   }
 }
-$("#product-results").addEventListener("click", (e) => {
+["#product-results", "#top-increases"].forEach((id) => $(id).addEventListener("click", (e) => {
   const r = e.target.closest("[data-open]");
   if (r) openReport(r.dataset.open);
+}));
+
+// ---------- theme ----------
+function syncThemeIcon() {
+  $("#theme-toggle").textContent = document.documentElement.classList.contains("dark") ? "☀️" : "🌙";
+}
+$("#theme-toggle").addEventListener("click", () => {
+  const dark = document.documentElement.classList.toggle("dark");
+  try { localStorage.setItem("theme", dark ? "dark" : "light"); } catch { /* private mode */ }
+  syncThemeIcon();
 });
+syncThemeIcon();
 
 // ---------- init ----------
 showTab("scan");

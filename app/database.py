@@ -28,7 +28,9 @@ CREATE TABLE IF NOT EXISTS invoices (
     total_gross REAL,
     qr_raw_url TEXT,
     image_path TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    increases_count INTEGER,
+    decreases_count INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS invoice_items (
@@ -70,9 +72,20 @@ def get_conn() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the first release. Nullable on purpose:
+    NULL = counts not computed yet (backfilled on startup)."""
+    for col in ("increases_count", "decreases_count"):
+        try:
+            conn.execute(f"ALTER TABLE invoices ADD COLUMN {col} INTEGER")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 # ---------- suppliers ----------
@@ -143,6 +156,7 @@ def get_invoice_items(conn: sqlite3.Connection, invoice_id: int) -> list[dict]:
 def list_invoices(conn: sqlite3.Connection, supplier_id: Optional[int] = None) -> list[dict]:
     sql = """SELECT i.id, i.mark, i.invoice_number, i.invoice_date, i.total_net, i.total_gross,
                     i.supplier_id, s.name AS supplier_name, s.afm AS supplier_afm,
+                    i.increases_count, i.decreases_count,
                     (SELECT COUNT(*) FROM invoice_items it WHERE it.invoice_id = i.id) AS item_count
              FROM invoices i JOIN suppliers s ON s.id = i.supplier_id"""
     params: tuple = ()
@@ -151,6 +165,32 @@ def list_invoices(conn: sqlite3.Connection, supplier_id: Optional[int] = None) -
         params = (supplier_id,)
     sql += " ORDER BY i.invoice_date DESC, i.id DESC"
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def update_invoice_counts(conn: sqlite3.Connection, invoice_id: int, increases: int, decreases: int) -> None:
+    conn.execute("UPDATE invoices SET increases_count = ?, decreases_count = ? WHERE id = ?",
+                 (increases, decreases, invoice_id))
+
+
+def invoice_ids_needing_counts(conn: sqlite3.Connection) -> list[int]:
+    rows = conn.execute("SELECT id FROM invoices WHERE increases_count IS NULL OR decreases_count IS NULL").fetchall()
+    return [r["id"] for r in rows]
+
+
+def supplier_invoice_ids_from(conn: sqlite3.Connection, supplier_id: int, invoice_date: str) -> list[int]:
+    """Invoices of a supplier dated on/after `invoice_date` (their comparisons may depend on it)."""
+    rows = conn.execute(
+        "SELECT id FROM invoices WHERE supplier_id = ? AND invoice_date >= ? ORDER BY invoice_date, id",
+        (supplier_id, invoice_date),
+    ).fetchall()
+    return [r["id"] for r in rows]
+
+
+def invoice_ids_since(conn: sqlite3.Connection, date_iso: str) -> list[int]:
+    rows = conn.execute(
+        "SELECT id FROM invoices WHERE invoice_date >= ? ORDER BY invoice_date DESC, id DESC", (date_iso,)
+    ).fetchall()
+    return [r["id"] for r in rows]
 
 
 def delete_invoice(conn: sqlite3.Connection, invoice_id: int) -> bool:
