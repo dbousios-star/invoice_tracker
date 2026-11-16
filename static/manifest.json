@@ -1,0 +1,15 @@
+{
+  "name": "Παρακολούθηση Τιμών Τιμολογίων",
+  "short_name": "Τιμές",
+  "description": "Σάρωση τιμολογίων και σύγκριση τιμών προμηθευτών",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#2563eb",
+  "lang": "el",
+  "icons": [
+    { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
