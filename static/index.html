@@ -40,7 +40,7 @@
         <div class="grid grid-cols-2 gap-3">
           <label class="flex items-center justify-center gap-2 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 py-4 font-medium cursor-pointer select-none">
             🖼️ Συλλογή / PDF
-            <input id="file-pick" type="file" accept="image/*,application/pdf" class="hidden">
+            <input id="file-pick" type="file" accept="image/*,application/pdf" multiple class="hidden">
           </label>
           <button id="btn-qr" class="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 py-4 font-medium">
             🔍 Σκανάρισμα Μόνο QR
@@ -60,6 +60,9 @@
         <div class="spinner"></div>
         <p id="loading-text" class="text-base font-medium">Ανάγνωση QR...</p>
       </div>
+
+      <!-- Batch progress -->
+      <div id="batch" class="mt-4"></div>
 
       <!-- Results -->
       <div id="results" class="mt-4"></div>

@@ -75,6 +75,7 @@ function setLoading(on, steps = []) {
   $("#scan-actions").classList.toggle("hidden", on);
   if (on) {
     $("#results").innerHTML = "";
+    $("#batch").innerHTML = "";
     steps.forEach(([ms, text]) => loadingTimers.push(setTimeout(() => ($("#loading-text").textContent = text), ms)));
   }
 }
@@ -101,9 +102,105 @@ async function handleFile(file) {
   }
 }
 ["#file-camera", "#file-pick"].forEach((id) => $(id).addEventListener("change", (e) => {
-  handleFile(e.target.files[0]);
+  const files = [...e.target.files];
   e.target.value = "";
+  if (files.length > 1) handleBatch(files);
+  else handleFile(files[0]);
 }));
+
+// ---------- batch upload ----------
+const MAX_BATCH = 20;
+let batchRunning = false;
+window.addEventListener("beforeunload", (e) => {
+  if (batchRunning) { e.preventDefault(); e.returnValue = ""; }
+});
+
+async function handleBatch(files) {
+  if (batchRunning) return;
+  hideAlert();
+  stopQr();
+  if (files.length > MAX_BATCH) {
+    showAlert(`⚠️ Επιλέξατε ${files.length} αρχεία· θα επεξεργαστούν τα πρώτα ${MAX_BATCH}.`, "warn");
+    files = files.slice(0, MAX_BATCH);
+  }
+  batchRunning = true;
+  $("#scan-actions").classList.add("hidden");
+  $("#results").innerHTML = "";
+
+  const box = $("#batch");
+  box.innerHTML = `
+    <div class="rounded-2xl bg-white dark:bg-slate-800 shadow p-4">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="font-bold">Μαζική καταχώρηση</h2>
+        <span id="batch-progress" class="text-sm font-semibold text-blue-600 dark:text-blue-400">0 / ${files.length}</span>
+      </div>
+      <div id="batch-rows" class="space-y-2">
+        ${files.map((f, i) => `
+          <div id="batch-row-${i}" class="rounded-xl border border-slate-200 dark:border-slate-700 p-3">
+            <div class="flex justify-between gap-2 text-sm">
+              <span class="truncate font-medium">${esc(f.name)}</span>
+              <span class="row-status shrink-0">⏳ Αναμονή</span>
+            </div>
+            <div class="row-detail text-xs text-slate-500 dark:text-slate-400"></div>
+          </div>`).join("")}
+      </div>
+      <div id="batch-summary" class="mt-3 text-sm font-semibold"></div>
+    </div>`;
+
+  const counts = { ok: 0, dup: 0, err: 0, withIncreases: 0 };
+  for (let i = 0; i < files.length; i++) {
+    const row = $(`#batch-row-${i}`);
+    const status = row.querySelector(".row-status");
+    const detail = row.querySelector(".row-detail");
+    status.textContent = "🔄 Επεξεργασία…";
+    row.classList.add("border-blue-400");
+    const fd = new FormData();
+    fd.append("file", files[i]);
+    try {
+      const r = await api("/api/upload", { method: "POST", body: fd });
+      const inv = r.invoice;
+      const inc = r.summary.INCREASED || 0;
+      const dec = r.summary.DECREASED || 0;
+      row.dataset.open = inv.id;
+      row.classList.add("cursor-pointer", "active:bg-slate-50", "dark:active:bg-slate-700");
+      detail.innerHTML = `${esc(inv.supplier_name)} · ${fmtDate(inv.invoice_date)}` +
+        (inc ? ` · <span class="text-red-600 dark:text-red-400 font-semibold">🔴 ${inc}</span>` : "") +
+        (dec ? ` · <span class="text-green-600 dark:text-green-400 font-semibold">🟢 ${dec}</span>` : "") +
+        ` · <span class="underline">προβολή</span>`;
+      if (r.duplicate) {
+        counts.dup++;
+        status.textContent = "⚠️ Ήδη καταχωρημένο";
+      } else {
+        counts.ok++;
+        if (inc) counts.withIncreases++;
+        status.textContent = "✅ Καταχωρήθηκε";
+      }
+    } catch (e) {
+      counts.err++;
+      status.textContent = "❌ Σφάλμα";
+      detail.textContent = e.message;
+      detail.classList.add("text-red-600", "dark:text-red-400");
+    }
+    row.classList.remove("border-blue-400");
+    $("#batch-progress").textContent = `${i + 1} / ${files.length}`;
+  }
+
+  $("#batch-summary").innerHTML = [
+    `✅ ${counts.ok} καταχωρήθηκαν`,
+    counts.dup && `⚠️ ${counts.dup} διπλά`,
+    counts.err && `❌ ${counts.err} σφάλματα`,
+    counts.withIncreases && `<span class="text-red-600 dark:text-red-400">🔴 ${counts.withIncreases} με αυξήσεις</span>`,
+  ].filter(Boolean).join(" · ");
+  batchRunning = false;
+  $("#scan-actions").classList.remove("hidden");
+}
+
+$("#batch").addEventListener("click", async (e) => {
+  const row = e.target.closest("[data-open]");
+  if (!row) return;
+  await openReport(row.dataset.open);
+  $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
+});
 
 // ---------- QR-only scan ----------
 async function startQr() {
@@ -230,7 +327,7 @@ function renderReport(report) {
       <button id="btn-delete-inv" class="py-4 rounded-2xl bg-white dark:bg-slate-800 border border-red-300 text-red-600 font-semibold">🗑️ Διαγραφή</button>
     </div>`;
 
-  $("#btn-new-scan").onclick = () => { $("#results").innerHTML = ""; hideAlert(); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  $("#btn-new-scan").onclick = () => { $("#results").innerHTML = ""; if (!batchRunning) $("#batch").innerHTML = ""; hideAlert(); window.scrollTo({ top: 0, behavior: "smooth" }); };
   $("#btn-delete-inv").onclick = () => deleteInvoice(inv.id);
   showTab("scan");
   window.scrollTo({ top: 0, behavior: "smooth" });

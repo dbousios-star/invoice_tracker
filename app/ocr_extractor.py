@@ -88,10 +88,14 @@ def load_pages(path: Path) -> list[Image.Image]:
         except ImportError as exc:
             raise ExtractionError("Η υποστήριξη PDF δεν είναι εγκατεστημένη (pymupdf).", 500) from exc
         pages = []
-        with pymupdf.open(path) as doc:
-            for page in list(doc)[:MAX_PDF_PAGES]:
-                pix = page.get_pixmap(dpi=200)
-                pages.append(Image.open(io.BytesIO(pix.tobytes("png"))))
+        try:
+            # Open from memory: no file handle left behind, so Windows can delete the upload
+            with pymupdf.open(stream=path.read_bytes(), filetype="pdf") as doc:
+                for page in list(doc)[:MAX_PDF_PAGES]:
+                    pix = page.get_pixmap(dpi=200)
+                    pages.append(Image.open(io.BytesIO(pix.tobytes("png"))))
+        except Exception as exc:
+            raise ExtractionError("Το PDF είναι κατεστραμμένο ή δεν μπορεί να ανοιχτεί.") from exc
         if not pages:
             raise ExtractionError("Το PDF δεν περιέχει σελίδες.")
         return pages
